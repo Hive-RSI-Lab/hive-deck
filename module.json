@@ -1,0 +1,6 @@
+{
+  "name": "deck",
+  "description": "A USB MIDI controller (first: the Pioneer DDJ-FLX4) as a command surface for the Hive: pads answer Waiting, hold or lift merges and jump between views, jogs scroll and select, faders and knobs set the worker limit and model routes, and the pad lights show the Hive's state. Runs on the laptop the controller is plugged into, with the person's own token; optional, not a default.",
+  "provides": {"programs": ["cmd/deck"], "procedures": ["docs/README.md"]},
+  "projects": []
+}
