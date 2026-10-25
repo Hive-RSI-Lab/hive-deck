@@ -477,6 +477,16 @@ func (e *Engine) absolute(ctrl string, b Binding, v float64, now time.Time) {
 			}
 			return
 		}
+		// cur == -1 means the current route isn't on the knob (not one of its stops).
+		// Don't pick up automatically—require a deliberate move, or refuse to overwrite
+		// a route the knob can't show.
+		if cur == -1 {
+			if !e.told[ctrl] {
+				e.told[ctrl] = true
+				e.say(fmt.Sprintf("%s: the Hive's route (%s) isn't on this knob; move the knob deliberately to set a new route", ctrl, e.route(b.Role)))
+			}
+			return
+		}
 		e.holds[ctrl], e.told[ctrl] = cur, false
 	}
 	if pos == cur {

@@ -143,6 +143,9 @@ func (m *Mapping) Check(p *surface.Profile) error {
 		if b.Do == "route" && b.Role == "" {
 			errs = append(errs, fmt.Sprintf("%s: route needs a role (lead, worker, reviewer, sweep, ...)", name))
 		}
+		if b.Do == "route" && slices.Contains([]string{"reviewer", "security", "warden", "tribunal"}, b.Role) {
+			errs = append(errs, fmt.Sprintf("%s: route to %q is a check seat; the lead's /api/op would need to approve it—consider limiting route knobs to worker and lead until /api/op exists, or the person will be asked each time", name, b.Role))
+		}
 		if b.Do == "workers" && b.Max != 0 && b.Max <= b.Min {
 			errs = append(errs, fmt.Sprintf("%s: workers max %d is not above min %d", name, b.Max, b.Min))
 		}
