@@ -1,0 +1,55 @@
+{
+  "profile": "ddj-flx4",
+  "confirm_seconds": 4,
+  "settle_ms": 600,
+  "controls": {
+    "pad.l.1": {"do": "approve"},
+    "pad.l.2": {"do": "refuse"},
+    "pad.l.3": {"do": "select", "step": -1},
+    "pad.l.4": {"do": "select", "step": 1},
+    "pad.l.5": {"do": "hold"},
+    "pad.l.6": {"do": "lift", "confirm": true},
+    "pad.l.7": {"do": "rerun", "confirm": true},
+    "pad.l.8": {"do": "retry", "confirm": true},
+
+    "pad.r.1": {"do": "view", "view": "waiting"},
+    "pad.r.2": {"do": "view", "view": "feed"},
+    "pad.r.3": {"do": "view", "view": "threads"},
+    "pad.r.4": {"do": "view", "view": "runs"},
+    "pad.r.5": {"do": "view", "view": "feed"},
+    "pad.r.6": {"do": "view", "view": "feed"},
+    "pad.r.7": {"do": "view", "view": "runs"},
+    "pad.r.8": {"do": "view", "view": "threads"},
+
+    "jog.l": {"do": "select", "per": 6},
+    "jog.r": {"do": "scroll", "per": 3},
+    "browse": {"do": "project"},
+    "browse.push": {"do": "refresh"},
+    "cue.l": {"do": "cancel"},
+    "cue.r": {"do": "cancel"},
+
+    "fader.l": {"do": "workers", "min": 0, "max": 8},
+    "knob.l.hi": {"do": "route", "role": "worker"},
+    "knob.r.hi": {"do": "route", "role": "lead"}
+  },
+  "lights": {
+    "pad.l.1": "approve",
+    "pad.l.2": "refuse",
+    "pad.l.3": "asks",
+    "pad.l.4": "asks",
+    "pad.l.5": "held",
+    "pad.l.6": "held",
+    "pad.r.1": "view.waiting",
+    "pad.r.2": "view.feed",
+    "pad.r.3": "view.threads",
+    "pad.r.4": "view.runs",
+    "pad.r.5": "main.green",
+    "pad.r.6": "main.red",
+    "pad.r.7": "gate",
+    "pad.r.8": "lead",
+    "play.l": "connected",
+    "play.r": "lead",
+    "cue.l": "armed",
+    "cue.r": "armed"
+  }
+}
