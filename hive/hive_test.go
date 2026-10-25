@@ -91,6 +91,8 @@ func TestClientCallsThePersonsAPI(t *testing.T) {
 		t.Fatalf("the config written back should keep what the deck didn't touch: %v", d.cfg)
 	}
 	c.Note("the person set max_workers from 3 to 5 from the deck")
+	c.Events(5)
+	c.Messages("lead")
 	want := []string{
 		`POST /api/answer {"answer":"merge","id":"a1","note":"from the deck"}`,
 		`POST /api/hold {"project":"deck","why":"held from the deck"}`,
@@ -102,6 +104,29 @@ func TestClientCallsThePersonsAPI(t *testing.T) {
 	for _, w := range want {
 		if !strings.Contains(all, w) {
 			t.Errorf("no call %s in\n%s", w, all)
+		}
+	}
+	// Pin the exact endpoint paths and payloads the client uses
+	for _, w := range []struct {
+		path   string
+		method string
+		has    string // substring of the JSON body
+	}{
+		{path: "/api/answer", method: "POST", has: `"answer":"merge"`},
+		{path: "/api/hold", method: "POST", has: `"project":"deck"`},
+		{path: "/api/hold", method: "POST", has: `"lift":true`},
+		{path: "/api/task/retry", method: "POST", has: `"id":"t1"`},
+		{path: "/api/module/report", method: "POST", has: `"from":"deck"`},
+	} {
+		found := false
+		for _, call := range d.calls {
+			if strings.Contains(call, w.method+" "+w.path) && (w.has == "" || strings.Contains(call, w.has)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing call %s %s with %q", w.method, w.path, w.has)
 		}
 	}
 	if bad := Remote(srv.URL, "wrong"); bad.Answer("a1", "merge", "") == nil {

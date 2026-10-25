@@ -359,6 +359,13 @@ func (c *Client) Op(name string, args map[string]any) (json.RawMessage, error) {
 	err := c.call("POST", "/api/op", map[string]any{"op": name, "args": args}, &out)
 	var se *statusErr
 	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		// Check if the response body indicates the seam is missing vs the resource not found.
+		// The daemon returns 404 for both: "no /api/op endpoint" and "task not found".
+		// We can't distinguish from here without reading the body on 404, but we should
+		// treat a 404 on /api/op as "seam missing" only when the body doesn't contain
+		// a structured "not found" error for a specific resource.
+		// For now, keep it as ErrNoOp; once /api/op exists, the caller should inspect
+		// the body for the difference.
 		return nil, ErrNoOp
 	}
 	return out, err
