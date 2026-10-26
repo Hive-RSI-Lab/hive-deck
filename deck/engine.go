@@ -477,7 +477,11 @@ func (e *Engine) absolute(ctrl string, b Binding, v float64, now time.Time) {
 			}
 			return
 		}
-		e.holds[ctrl], e.told[ctrl] = cur, false
+		// When cur == -1, the Hive's route is not on the knob.
+		// Don't set holds - the knob should work normally.
+		if cur >= 0 {
+			e.holds[ctrl], e.told[ctrl] = cur, false
+		}
 	}
 	if pos == cur {
 		delete(e.pending, ctrl)
