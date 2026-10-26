@@ -296,6 +296,74 @@ func TestRouteKnob(t *testing.T) {
 	}
 }
 
+func TestRouteKnobWhenHiveRouteNotInChoices(t *testing.T) {
+	// Hive has route "gpt-4" which is not in the knob's choices: "", "claude:opus", "qwen"
+	st := waiting()
+	st.Config.Routes = map[string][]string{"worker": {"gpt-4"}}
+	e, h, _, p := setup(t, "", st, false)
+
+	// Move knob from bottom (0x00) to top (0x7F) -> should select "qwen"
+	press(t, e, p, t0, midi.Msg{0xB0, 0x07, 0x00}, midi.Msg{0xB0, 0x07, 0x7F})
+	e.Tick(t0.Add(time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"qwen","role":"worker"}` {
+		t.Fatalf("first move: %v", c)
+	}
+
+	// Update Hive state to reflect the change
+	h.st.Config.Routes = map[string][]string{"worker": {"qwen"}}
+	e.Poll()
+
+	// Move knob from top (0x7F) to middle (0x40) -> should select "claude:opus"
+	press(t, e, p, t0.Add(2*time.Second), midi.Msg{0xB0, 0x07, 0x7F}, midi.Msg{0xB0, 0x07, 0x40})
+	e.Tick(t0.Add(3*time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"claude:opus","role":"worker"}` {
+		t.Fatalf("second move: %v", c)
+	}
+
+	// Update Hive state
+	h.st.Config.Routes = map[string][]string{"worker": {"claude:opus"}}
+	e.Poll()
+
+	// Move knob from middle (0x40) to bottom (0x00) -> should select no route
+	press(t, e, p, t0.Add(4*time.Second), midi.Msg{0xB0, 0x07, 0x40}, midi.Msg{0xB0, 0x07, 0x00})
+	e.Tick(t0.Add(5*time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"","role":"worker"}` {
+		t.Fatalf("third move: %v", c)
+	}
+}
+
+func TestRouteKnobWhenHiveRouteNotInChoicesNoStateUpdate(t *testing.T) {
+	// Hive has route "gpt-4" which is not in the knob's choices: "", "claude:opus", "qwen"
+	// This tests the bug where the Hive doesn't update its state between knob moves
+	st := waiting()
+	st.Config.Routes = map[string][]string{"worker": {"gpt-4"}}
+	e, h, _, p := setup(t, "", st, false)
+
+	// First move: knob from bottom (0x00) to top (0x7F) -> should select "qwen"
+	press(t, e, p, t0, midi.Msg{0xB0, 0x07, 0x00}, midi.Msg{0xB0, 0x07, 0x7F})
+	e.Tick(t0.Add(time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"qwen","role":"worker"}` {
+		t.Fatalf("first move: %v", c)
+	}
+
+	// DON'T update Hive state - Hive still has "gpt-4"
+	// Second move: knob from top (0x7F) to middle (0x40) -> should select "claude:opus"
+	// This was the bug: the knob would become dead because cur == -1 and holds was set to -1
+	press(t, e, p, t0.Add(2*time.Second), midi.Msg{0xB0, 0x07, 0x7F}, midi.Msg{0xB0, 0x07, 0x40})
+	e.Tick(t0.Add(3*time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"claude:opus","role":"worker"}` {
+		t.Fatalf("second move (no state update): %v", c)
+	}
+
+	// DON'T update Hive state - still "gpt-4"
+	// Third move: knob from middle (0x40) to bottom (0x00) -> should select no route
+	press(t, e, p, t0.Add(4*time.Second), midi.Msg{0xB0, 0x07, 0x40}, midi.Msg{0xB0, 0x07, 0x00})
+	e.Tick(t0.Add(5*time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"","role":"worker"}` {
+		t.Fatalf("third move (no state update): %v", c)
+	}
+}
+
 func TestLightsFollowTheHive(t *testing.T) {
 	st := waiting()
 	st.Checks.Running = []hive.Slot{{Project: "deck", Kind: "test"}}
