@@ -470,7 +470,7 @@ func (e *Engine) absolute(ctrl string, b Binding, v float64, now time.Time) {
 	e.lastPos[ctrl] = pos
 	if h, held := e.holds[ctrl]; !held || h != cur {
 		crossed := had && (prev-cur)*(pos-cur) < 0
-		if cur >= 0 && pos != cur && !crossed {
+		if cur != -1 && pos != cur && !crossed {
 			if !e.told[ctrl] {
 				e.told[ctrl] = true
 				e.say(fmt.Sprintf("%s is at %s and the Hive has %s: move it there to pick it up", ctrl, e.label(b, pos), e.label(b, cur)))
