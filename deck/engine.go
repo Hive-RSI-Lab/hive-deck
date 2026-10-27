@@ -468,7 +468,33 @@ func (e *Engine) absolute(ctrl string, b Binding, v float64, now time.Time) {
 	}
 	prev, had := e.lastPos[ctrl]
 	e.lastPos[ctrl] = pos
-	if h, held := e.holds[ctrl]; !held || h != cur {
+
+	// When the Hive's route is not one of the knob's stops (cur == -1),
+	// don't show a pickup message, don't set holds to -1, and don't
+	// immediately add to pending. Instead, wait for a deliberate move
+	// (crossing a boundary: moving from a position that wasn't the initial one)
+	// to pick a route.
+	if cur == -1 {
+		// Track initial position for this control when cur == -1
+		// told[ctrl] false means "initial position not set yet" (default for new keys)
+		if !e.told[ctrl] {
+			// First time: record initial position
+			e.holds[ctrl] = pos
+			e.told[ctrl] = true // told tracks "initial pos set"
+			return
+		}
+		// Check if we've moved from initial position AND were already away from initial
+		// holds[ctrl] holds the initial position; prev is the last position seen
+		// We only trigger when moving while NOT at the initial position
+		crossed := pos != e.holds[ctrl] && prev != e.holds[ctrl] && pos != prev
+		if !crossed {
+			// Not a deliberate move yet
+			return
+		}
+		// Deliberate move: user crossed a boundary, pick this route
+		e.holds[ctrl], e.told[ctrl] = pos, false
+		// Fall through to pending logic
+	} else if h, held := e.holds[ctrl]; !held || h != cur {
 		crossed := had && (prev-cur)*(pos-cur) < 0
 		if cur >= 0 && pos != cur && !crossed {
 			if !e.told[ctrl] {

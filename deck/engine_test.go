@@ -296,6 +296,30 @@ func TestRouteKnob(t *testing.T) {
 	}
 }
 
+func TestRouteKnobCurMinusOne(t *testing.T) {
+	// The Hive has a route ("gpt-4") that is not in the knob's choices
+	// (choices are: no route, claude:opus, qwen). This means cur == -1.
+	st := waiting()
+	st.Config.Routes = map[string][]string{"worker": {"gpt-4"}}
+	e, h, _, p := setup(t, "", st, false)
+
+	// Move knob from bottom (0) to first model (1) - no crossed boundary yet
+	// 0x00 = 0 -> pos 0, 0x2B = 43 -> pos 1
+	press(t, e, p, t0, midi.Msg{0xB0, 0x07, 0x00}, midi.Msg{0xB0, 0x07, 0x2B})
+	e.Tick(t0.Add(time.Second))
+	if c := h.take(); len(c) != 0 {
+		t.Fatalf("first move should not trigger route change: %v", c)
+	}
+
+	// Move further to second model (2) - crossed boundary (0->1->2 crosses 1)
+	// 0x55 = 85 -> pos 2
+	press(t, e, p, t0.Add(time.Second), midi.Msg{0xB0, 0x07, 0x55})
+	e.Tick(t0.Add(2 * time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"qwen","role":"worker"}` {
+		t.Fatalf("crossed boundary should pick qwen: %v", c)
+	}
+}
+
 func TestLightsFollowTheHive(t *testing.T) {
 	st := waiting()
 	st.Checks.Running = []hive.Slot{{Project: "deck", Kind: "test"}}
