@@ -157,8 +157,8 @@ func TestConfirmLapses(t *testing.T) {
 }
 
 func TestAnotherControlCancelsTheConfirm(t *testing.T) {
+	e, h, _, p := setup(t, "", waiting(), false)
 	for name, between := range map[string][]midi.Msg{"refuse": refuse, "cue": cue, "next": next} {
-		e, h, _, p := setup(t, "", waiting(), false)
 		press(t, e, p, t0, approve...)
 		press(t, e, p, t0, between...)
 		press(t, e, p, t0, approve...)
@@ -287,6 +287,14 @@ func TestWorkerFaderPicksUpThenSettles(t *testing.T) {
 }
 
 func TestRouteKnob(t *testing.T) {
+	e, h, _, p := setup(t, "", waiting(), false)
+	e.Poll()
+	e.Poll() // ensure state read
+	e.st.Config.Routes = map[string][]string{"worker": {"unknown"}}
+	e.Poll()
+	e.Poll()
+	e, h, _, p = setup(t, "", waiting(), false)
+
 	e, h, _, p := setup(t, "", waiting(), false)
 	// choices: no route, claude:opus, qwen; the worker has no route, so the knob holds at the bottom
 	press(t, e, p, t0, midi.Msg{0xB0, 0x07, 0x00}, midi.Msg{0xB0, 0x07, 0x7F})
