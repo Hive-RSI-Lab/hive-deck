@@ -4,6 +4,7 @@ An optional Hive module that turns a USB MIDI controller (first: Ihsan's Pioneer
 
 - `cmd/deck`: the program (`deck check` first on a new laptop, then `deck --dry-run` and `deck`)
 - `check/`: `deck check`, the profile against the real device
+- `checks/`: the reports `deck check` wrote on the real deck; `cmd/score` (the project's score) is the share of the profile's controls they heard
 - `surface/`: the controller's MIDI map, as a profile (`profiles/ddj-flx4.json`)
 - `deck/`: the actions and lights, and the default mapping (`default.json`)
 - `hive/`: the slice of the Hive's API the deck uses, with the person's token
