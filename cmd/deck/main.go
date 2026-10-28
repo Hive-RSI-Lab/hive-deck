@@ -11,8 +11,9 @@
 //
 // It talks to the Hive with the person's own token: on this machine it reads
 // the daemon's address and token from the workspace as the control center
-// does; for a Hive elsewhere pass --url (an SSH tunnel to its port, say) and
-// --token-file (its .hive/private/daemon.json, or a file holding the token).
+// does; for a Hive elsewhere pass --ssh host, and the deck follows it over
+// one ssh session across its restarts (or --url and --token-file, for an
+// address and token of your own).
 package main
 
 import (
@@ -50,6 +51,8 @@ func run(args []string) error {
 	profile := fs.String("profile", "", "a surface profile: a built-in name or a JSON file (default: the mapping's)")
 	device := fs.String("device", "", "the MIDI device's name, or part of it (default: the profile's)")
 	dry := fs.Bool("dry-run", false, "say what each control would do and send nothing to the Hive")
+	sshDest := fs.String("ssh", "", "a Hive elsewhere, over ssh: host, user@host or a Host from ~/.ssh/config")
+	hiveCmd := fs.String("hive", "", "with --ssh: the hive command there (default: hive, on PATH or in ~/.local/bin)")
 	url := fs.String("url", "", "a Hive elsewhere: its daemon's address, http://host:port")
 	tokenFile := fs.String("token-file", "", "with --url: the person's token, or that Hive's daemon.json")
 	workspace := fs.String("workspace", "", "this machine's Hive folder (default: as the hive command finds it)")
@@ -109,10 +112,14 @@ func run(args []string) error {
 		return fmt.Errorf("no command %q: run, list, learn, mapping, check or layout", cmd)
 	}
 
-	h, herr := connect(*url, *tokenFile, *workspace)
+	if *sshDest != "" && *url != "" {
+		return errors.New("--ssh or --url, not both")
+	}
+	h, done, herr := connect(*sshDest, *hiveCmd, *url, *tokenFile, *workspace)
 	if herr != nil && !*dry {
 		return herr
 	}
+	defer done()
 	if herr != nil {
 		fmt.Println("dry run without the Hive:", herr)
 		h = offline{}
@@ -189,10 +196,26 @@ func pick(a, b string) string {
 	return b
 }
 
-func connect(url, tokenFile, workspace string) (hive.Hive, error) {
-	if url == "" {
-		return hive.Local(pick(workspace, hive.Workspace()))
+// connect reaches the Hive, and returns what ends the connection.
+func connect(sshDest, hiveCmd, url, tokenFile, workspace string) (hive.Hive, func(), error) {
+	switch {
+	case sshDest != "":
+		fmt.Fprintf(os.Stderr, "Connecting to the Hive on %s over ssh…\n", sshDest)
+		s := &hive.SSH{Dest: sshDest, Hive: hiveCmd}
+		c, err := hive.DialSSH(s)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return c, s.Close, nil
+	case url != "":
+		h, err := remote(url, tokenFile)
+		return h, func() {}, err
 	}
+	h, err := hive.Local(pick(workspace, hive.Workspace()))
+	return h, func() {}, err
+}
+
+func remote(url, tokenFile string) (hive.Hive, error) {
 	tok := os.Getenv("HIVE_TOKEN")
 	if tokenFile != "" {
 		raw, err := os.ReadFile(tokenFile)

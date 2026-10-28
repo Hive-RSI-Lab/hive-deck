@@ -1,8 +1,8 @@
 // Package hive is the deck's view of the person's Hive: the slice of the
 // daemon's HTTP API the deck reads and calls, with the person's own token.
 // Locally it reads the daemon's address and token from the workspace, as the
-// control center does, and follows a restart; remotely it takes an address
-// (an SSH tunnel to the daemon's port, say) and a token file.
+// control center does, and follows a restart; on another machine it follows
+// the daemon over one ssh session (DialSSH), or takes an address and a token.
 package hive
 
 import (
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -207,6 +208,7 @@ type Client struct {
 	mu       sync.Mutex
 	info     Info
 	infoFile string // local: re-read when the daemon restarts with a new token
+	ssh      *SSH   // over ssh: the daemon.json the Hive there last printed
 	http     *http.Client
 }
 
@@ -247,7 +249,7 @@ func (c *Client) readInfo() (Info, error) {
 	var info Info
 	raw, err := os.ReadFile(c.infoFile)
 	if err != nil {
-		return info, fmt.Errorf("the Hive isn't running here (no %s); start it, or pass --url and --token-file for one elsewhere", c.infoFile)
+		return info, fmt.Errorf("the Hive isn't running here (no %s); start it, or pass --ssh host for one elsewhere", c.infoFile)
 	}
 	if err := json.Unmarshal(raw, &info); err != nil {
 		return info, fmt.Errorf("%s: %v", c.infoFile, err)
@@ -270,22 +272,66 @@ type statusErr struct {
 func (e *statusErr) Error() string { return e.msg }
 
 func (c *Client) call(method, path string, body, out any) error {
-	c.mu.Lock()
-	info := c.info
-	c.mu.Unlock()
-	err := c.do(info, method, path, body, out)
+	info, err := c.current()
+	if err != nil {
+		return err // the ssh session dropped: say so, not a refused request
+	}
+	err = c.do(info, method, path, body, out)
 	var se *statusErr
-	if c.infoFile != "" && (errors.As(err, &se) && se.code == http.StatusUnauthorized || err != nil && strings.Contains(err.Error(), "connection refused")) {
+	if errors.As(err, &se) && se.code == http.StatusUnauthorized || dialFailed(err) {
 		// A restarted daemon has a new port or token; daemon.json names it.
 		// A refused or unreachable request did nothing, so sending it again is safe.
-		if next, e := c.readInfo(); e == nil && next != info {
-			c.mu.Lock()
-			c.info = next
-			c.mu.Unlock()
+		if next, e := c.next(); e == nil && next != info {
 			err = c.do(next, method, path, body, out)
 		}
 	}
+	if c.ssh != nil && dialFailed(err) {
+		if _, e := c.ssh.Info(); e != nil {
+			return e
+		}
+		var op *net.OpError
+		if errors.As(err, &op) && op.Op == "proxyconnect" { // ssh's proxy is gone before ssh is seen to end
+			return fmt.Errorf("the ssh session to %s dropped; the deck dials it again", c.ssh.Dest)
+		}
+		return fmt.Errorf("the Hive on %s isn't answering (restarting, or stopped); the deck carries on when it's back", c.ssh.Dest)
+	}
 	return err
+}
+
+// current is the daemon to send to.
+func (c *Client) current() (Info, error) {
+	if c.ssh != nil {
+		return c.ssh.Info()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.info, nil
+}
+
+// next is the daemon as daemon.json names it now.
+func (c *Client) next() (Info, error) {
+	switch {
+	case c.ssh != nil:
+		return c.ssh.Info()
+	case c.infoFile != "":
+		info, err := c.readInfo()
+		if err == nil {
+			c.mu.Lock()
+			c.info = info
+			c.mu.Unlock()
+		}
+		return info, err
+	}
+	return Info{}, errors.New("no daemon.json to follow")
+}
+
+// dialFailed: the request never reached the daemon (nothing listens on its
+// port, ssh's proxy couldn't connect to it, or the proxy is gone), so it can
+// be sent again. A
+// request that went out and lost its answer is not: it may have been acted on.
+func dialFailed(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && (op.Op == "dial" || op.Op == "socks connect" || op.Op == "proxyconnect")
 }
 
 func (c *Client) do(info Info, method, path string, body, out any) error {
