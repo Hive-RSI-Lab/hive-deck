@@ -1,0 +1,32 @@
+# On a version tag (v0.1.0, …), build deck for Windows and Linux without cgo
+# and attach the binaries to a GitHub release. macOS stays on go install:
+# CoreMIDI needs cgo.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/deck.exe ./cmd/deck
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/deck-linux-amd64 ./cmd/deck
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

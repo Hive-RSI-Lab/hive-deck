@@ -74,7 +74,9 @@ The worker limit, routes and re-running checks should go **through the same ops 
 
 ## Running it
 
-You need Go 1.22 or newer. On macOS you also need the Xcode command line tools (`xcode-select --install`), because CoreMIDI needs cgo. Linux and Windows need nothing else.
+**Windows and Linux:** download the binary from the [latest release](https://github.com/Hive-RSI-Lab/hive-deck/releases/latest). There's nothing to install. On Windows it's `deck.exe`. Put it in a folder and run it from a terminal there (`.\deck.exe check`). On Linux it's `deck-linux-amd64`. Rename it to `deck` and `chmod +x` it.
+
+**Or build it yourself**, which is the only way on macOS. You need Go 1.22 or newer. On macOS you also need the Xcode command line tools (`xcode-select --install`), because CoreMIDI needs cgo. Linux and Windows need nothing else.
 
 ```sh
 go install github.com/Hive-RSI-Lab/hive-deck/cmd/deck@latest   # or: git clone … && go build ./cmd/deck
