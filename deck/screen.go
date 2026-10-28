@@ -8,8 +8,9 @@ import (
 )
 
 // Screen is the deck's own terminal view: the Hive in a few lines, the
-// current view with its selection, and what the deck said last. The jogs
-// move and scroll it; the control center keeps its own.
+// current view with its selection, and what the deck said last. While a
+// control center is open the deck drives that, and this view follows it;
+// with none, the jogs move and scroll this one.
 func (e *Engine) Screen(width, height int) string {
 	width, height = max(width, 40), max(height, 12)
 	var b strings.Builder
@@ -46,8 +47,9 @@ func (e *Engine) Screen(width, height int) string {
 		tabs = append(tabs, v)
 	}
 	line(strings.Join(tabs, "  "))
+	line(e.steering())
 	line(strings.Repeat("─", width))
-	body := height - 6 - len(e.log)
+	body := height - 7 - len(e.log)
 	body = max(body, 4)
 	rows := e.rows(width)
 	for i := 0; i < body; i++ {
@@ -65,6 +67,31 @@ func (e *Engine) Screen(width, height int) string {
 		line("· " + s)
 	}
 	return b.String()
+}
+
+// steering is the line saying what the controls move.
+func (e *Engine) steering() string {
+	switch {
+	case e.noUI:
+		return "the controls move this view: this Hive can't be driven yet (hive update)"
+	case !e.Driving():
+		return "the controls move this view: open the control center (hive) for the deck to drive it"
+	}
+	v := e.ui
+	s := "driving the control center: " + e.uiShown()
+	if v.Detail != "" {
+		s += " › " + v.Detail
+	}
+	if v.Title != "" {
+		s += " · " + clip(v.Title, 60)
+	}
+	if len(v.Options) > 0 && v.Option >= 0 && v.Option < len(v.Options) {
+		s += " · picked: " + v.Options[v.Option]
+	}
+	if !e.caughtUp() {
+		s += " (moving…)"
+	}
+	return s
 }
 
 func orDash(s string) string {

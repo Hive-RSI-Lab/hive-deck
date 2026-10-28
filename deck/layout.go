@@ -25,6 +25,12 @@ func Short(b Binding) string {
 		return "SELECT"
 	case "view":
 		return strings.ToUpper(b.View)
+	case "pick":
+		return dir(b.Step, "◀ ANSWER", "ANSWER ▶")
+	case "page":
+		return dir(b.Step, "▲ PAGE", "▼ PAGE")
+	case "answer":
+		return "ANSWER ×2"
 	case "workers":
 		return "WORKERS"
 	case "route":
@@ -42,13 +48,13 @@ func Short(b Binding) string {
 // colours by what an action is about: answering, merges, moving around, settings.
 func colour(do string) string {
 	switch do {
-	case "approve":
+	case "approve", "answer":
 		return "#2e9e5b"
 	case "refuse":
 		return "#c8463d"
 	case "hold", "lift", "rerun", "retry":
 		return "#d08a1e"
-	case "select", "scroll", "project", "view", "refresh", "cancel":
+	case "select", "scroll", "page", "pick", "open", "back", "project", "view", "refresh", "cancel":
 		return "#3a74c4"
 	case "workers", "route":
 		return "#8a55c2"

@@ -160,7 +160,7 @@ func run(args []string) error {
 	signal.Notify(stop, os.Interrupt)
 	tick := time.NewTicker(60 * time.Millisecond)
 	defer tick.Stop()
-	lastPoll, lastDraw := time.Now(), time.Time{}
+	lastPoll, lastUI, lastDraw := time.Now(), time.Now(), time.Time{}
 	for {
 		select {
 		case <-stop:
@@ -184,7 +184,10 @@ func run(args []string) error {
 			e.Tick(now)
 			if now.Sub(lastPoll) >= time.Second {
 				e.Poll()
-				lastPoll = now
+				lastPoll, lastUI = now, now
+			} else if now.Sub(lastUI) >= 300*time.Millisecond {
+				e.PollUI() // the lights follow the control center as it moves
+				lastUI = now
 			}
 			if err := e.Flush(port, now); err != nil {
 				fmt.Fprintln(os.Stderr, "deck: lights:", err)
@@ -386,3 +389,5 @@ func (offline) Retry(string) error                                 { return errO
 func (offline) Op(string, map[string]any) (json.RawMessage, error) { return nil, errOffline }
 func (offline) SetConfig(func(map[string]any)) error               { return errOffline }
 func (offline) Note(string) error                                  { return errOffline }
+func (offline) UI(hive.UICommand) (int64, error)                   { return 0, errOffline }
+func (offline) UIView() (*hive.UIView, error)                      { return nil, errOffline }

@@ -20,6 +20,9 @@ type fakeHive struct {
 	calls  []string
 	noOp   bool
 	config map[string]any
+	ui     *hive.UIView // the control center's view; nil: none has reported
+	noUI   bool         // a Hive from before /api/ui
+	uiSeq  int64
 }
 
 func (f *fakeHive) State() (hive.State, error)              { return f.st, nil }
@@ -48,6 +51,24 @@ func (f *fakeHive) Op(name string, args map[string]any) (json.RawMessage, error)
 	}
 	raw, _ := json.Marshal(args)
 	return nil, f.rec("op %s %s", name, raw)
+}
+
+func (f *fakeHive) UIView() (*hive.UIView, error) {
+	if f.noUI {
+		return nil, hive.ErrNoUI
+	}
+	if f.ui == nil {
+		return nil, nil
+	}
+	v := *f.ui
+	return &v, nil
+}
+func (f *fakeHive) UI(c hive.UICommand) (int64, error) {
+	if f.noUI {
+		return 0, hive.ErrNoUI
+	}
+	f.uiSeq++
+	return f.uiSeq, f.rec("ui %s %d %s %s %s %s", c.Action, c.N, c.View, c.Answer, c.Client, c.Control)
 }
 
 func (f *fakeHive) take() []string { c := f.calls; f.calls = nil; return c }
