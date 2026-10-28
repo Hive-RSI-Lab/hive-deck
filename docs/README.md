@@ -83,11 +83,23 @@ go install github.com/Hive-RSI-Lab/hive-deck/cmd/deck@latest   # or: git clone â
 Then, with the FLX4 plugged in, and rekordbox or any other DJ software closed so it isn't holding the device:
 
 ```sh
-deck list               # the MIDI devices this machine sees: the DDJ-FLX4 should be there
+deck check              # the first step on a new laptop: see below
+deck list               # the MIDI devices this machine sees, if check can't find the deck
 deck learn              # move every control: each line is the message and the control it reads as
 deck --dry-run          # what each control does, then what each press would do; sends nothing to the Hive
 deck                    # the real thing
 ```
+
+### `deck check`: the first step
+
+`deck check` needs no Hive. It opens the deck and does two things:
+
+1. **The lights.** It lights each light in the profile on its own, in turn (pads, PLAY, CUEâ€¦). Watch the deck. Then press Enter if every one lit, or type the ones that didn't (`pad.l.3 play.r`, or just `no`).
+2. **The controls.** Every light that hasn't been heard yet comes back on. Press every pad and button, turn both jogs and every knob, and move every fader. Each lit control goes dark once the deck has heard it, and the screen says how many are left. It ends when every control is heard, when you press Enter, or after 5 minutes (`--wait`).
+
+Then it prints a table with every control in the profile: whether the mapping uses it, whether it was heard, and the message it was heard by (or the one the profile expected). A second table lists the messages the deck sent that the profile doesn't know, with the control heard just before each one. A wrong note number usually shows up there, right after the control it belongs to. SHIFT with a pad sends notes like these too, and they don't fail the check.
+
+The report is also written to `deck-check.md` (`--out`). Paste it into the deck's chat. `deck check` exits non-zero if any control in the profile was never heard, or if you said a light didn't light.
 
 On Linux the deck opens `/dev/snd/midiC*D*`, so your user needs to be in the `audio` group.
 
@@ -119,7 +131,7 @@ The token is yours: anyone with it can do what you can in the control center. Ke
 
 ```sh
 deck mapping > ~/deck.json      # the default, to edit
-deck check --map ~/deck.json    # names, actions, views, signals and control types checked against the profile
+deck check --map ~/deck.json    # names, actions, views, signals and control types checked against the profile (no device)
 deck --map ~/deck.json
 deck layout --map ~/deck.json   # what each control does now, in words (--svg for the picture)
 ```
@@ -149,7 +161,7 @@ There are two layers, so a future custom command-center product needs a profile,
 
 A different controller, or the custom hardware, needs only a new profile (`--profile my-surface.json`), and every action, light and test carries over. If `deck learn` shows a control sending something other than what the profile says, fix that line in the profile.
 
-The FLX4 profile comes from Pioneer's MIDI message list, the layout the FLX4 shares with the DDJ-400. Hasn't been checked on a real deck yet: `deck learn` is the check.
+The FLX4 profile comes from Pioneer's MIDI message list, the layout the FLX4 shares with the DDJ-400. Hasn't been checked on a real deck yet: `deck check` is the check, and `deck learn` shows any message in detail.
 
 ## Tests
 
@@ -159,3 +171,4 @@ The FLX4 profile comes from Pioneer's MIDI message list, the layout the FLX4 sha
 - that covers the mapping and its checks, the confirm rule (second press, lapse, cancel, never one-touch for what's always yours), the lights (first flush, only changes after, blink phases), soft takeover and settling, and dry runs
 - the HTTP client runs against a stand-in daemon: token, errors, the missing `/api/op`, config write-back, following a restart's new token
 - a test fails if the layout picture has drifted from the mapping
+- `deck check` runs against the fake device: every control heard, one missing, a message the profile doesn't know, lights named as dark, and the deck unplugged

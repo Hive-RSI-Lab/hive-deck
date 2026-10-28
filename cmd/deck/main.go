@@ -6,7 +6,9 @@
 //	deck list               the MIDI devices this machine sees
 //	deck learn              print every message the deck sends, and its control's name
 //	deck mapping            print the default mapping, to copy and edit
-//	deck check --map FILE   check a mapping against the profile
+//	deck check              the first step on a new laptop: light every light, hear every
+//	                        control, and report both against the profile (no Hive needed)
+//	deck check --map FILE   check a mapping against the profile only (no device needed)
 //	deck layout [--svg]     the mapping on the deck, as text or as a picture
 //
 // It talks to the Hive with the person's own token: on this machine it reads
@@ -28,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Hive-RSI-Lab/hive-deck/check"
 	"github.com/Hive-RSI-Lab/hive-deck/deck"
 	"github.com/Hive-RSI-Lab/hive-deck/hive"
 	"github.com/Hive-RSI-Lab/hive-deck/midi"
@@ -58,6 +61,9 @@ func run(args []string) error {
 	workspace := fs.String("workspace", "", "this machine's Hive folder (default: as the hive command finds it)")
 	plain := fs.Bool("plain", false, "print a line per action instead of drawing the screen")
 	svg := fs.Bool("svg", false, "layout: draw the deck as SVG")
+	out := fs.String("out", "deck-check.md", "check: where to write the report")
+	wait := fs.Duration("wait", 5*time.Minute, "check: the longest to wait for the controls to be touched")
+	step := fs.Duration("step", 300*time.Millisecond, "check: how long each light stays on in the walk")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -95,7 +101,10 @@ func run(args []string) error {
 	switch cmd {
 	case "check":
 		fmt.Printf("the mapping is good: %d controls and %d lights on the %s\n", len(m.Controls), len(m.Lights), p.Name)
-		return nil
+		if *mapPath != "" {
+			return nil
+		}
+		return checkDevice(p, m, pick(*device, p.Match), *out, *step, *wait)
 	case "layout":
 		if *svg {
 			fmt.Print(deck.SVG(p, m))
@@ -264,6 +273,46 @@ func learn(p *surface.Profile, device string) error {
 			}
 		}
 	}
+}
+
+// checkDevice is `deck check` on the device: it writes the report to out
+// and fails if any control in the profile went unheard or a light stayed dark.
+func checkDevice(p *surface.Profile, m *deck.Mapping, device, out string, step, wait time.Duration) error {
+	port, err := midi.Open(device)
+	if err != nil {
+		return err
+	}
+	defer port.Close()
+	used := map[string]bool{}
+	for name := range m.Controls {
+		used[name] = true
+	}
+	for name := range m.Lights {
+		used[name] = true
+	}
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	r := check.Run(check.Config{Profile: p, Port: port, Lines: lines, Out: os.Stdout, Used: used, Step: step, Wait: wait})
+	rep := r.Report()
+	fmt.Println()
+	fmt.Print(rep)
+	if err := os.WriteFile(out, []byte(rep), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("\nthe report is in %s: paste it into the deck's chat\n", out)
+	if missing := r.Missing(); len(missing) > 0 {
+		return fmt.Errorf("%d of %d controls in the profile were never heard: %s", len(missing), len(p.Controls), strings.Join(missing, ", "))
+	}
+	if r.LightsBad {
+		return errors.New("some lights didn't light")
+	}
+	return nil
 }
 
 func readKeys() chan string {
