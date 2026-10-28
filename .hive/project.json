@@ -1,3 +1,12 @@
 {
-  "test": "go test ./..."
+  "test": "go test ./...",
+  "score": {
+    "command": "go run ./cmd/score",
+    "direction": "higher",
+    "tolerance": 0,
+    "paths": [
+      "cmd/score/",
+      "check/score.go"
+    ]
+  }
 }
