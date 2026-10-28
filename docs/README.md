@@ -1,6 +1,6 @@
 # deck: the DDJ-FLX4 drives the Hive
 
-`deck` is a small program that runs on the laptop the controller is plugged into, next to the control center. It opens a Pioneer DDJ-FLX4 as a USB MIDI device (Linux, macOS, Windows) and talks to your Hive through the daemon's API with your own token. Pads answer what's waiting, hold or lift merges, retry work and jump between views. The jogs move the selection and scroll. A fader and two knobs set the worker limit and model routes. The pad lights show the Hive's state.
+`deck` is a small program that runs on the laptop the controller is plugged into, next to the control center. It opens a Pioneer DDJ-FLX4 as a USB MIDI device (Linux, macOS, Windows) and talks to your Hive through the daemon's API with your own token. It drives the control center you have open: the jogs move its selection and scroll, pads switch its views, the browse knob's push opens what's selected and LOAD 1 goes back, and the view pads light for the view it shows. Pads answer the Waiting item selected there, hold or lift merges and retry work. A fader and two knobs set the worker limit and model routes. The other pad lights show the Hive's state.
 
 It's an optional module and isn't installed by default.
 
@@ -12,22 +12,27 @@ It's an optional module and isn't installed by default.
 
 | Control | Does | Light |
 |---|---|---|
-| Left pad 1 | **approve** the selected Waiting item: its first option (yes, merge, run, install…). Press twice. | on when there's something to approve; fast while waiting for the second press |
+| Left pad 1 | **approve** the Waiting item selected in the control center: its first option (yes, merge, run, install…). Press twice. | on when there's something to approve; fast while waiting for the second press |
 | Left pad 2 | **refuse** it: its second option (no, leave open, decline…). Press twice. | the same |
 | Left pads 3 / 4 | previous / next Waiting item | blink while anything waits on you |
 | Left pad 5 | **hold** the project's merges | on while held |
 | Left pad 6 | **lift** the hold (press twice) | on while held |
 | Left pad 7 | **re-run** the failed checks on the selected item's task, or the project's newest open PR (press twice) | |
 | Left pad 8 | **retry** the selected item's task, or the project's newest blocked or stopped one (press twice) | |
-| Right pads 1–4 | jump to the **waiting / feed / threads / runs** view | on for the current view |
+| Right pads 1–4 | show the **Waiting / dashboard / threads / agents** view | on for the view the control center shows |
 | Right pad 5 | jump to the feed | **main green**: on while the project's main passed its last measure |
 | Right pad 6 | jump to the feed | **main red**: blinks while main failed its last measure |
 | Right pad 7 | jump to runs | **gate**: on while a check runs; blinks while checks wait for a slot |
 | Right pad 8 | jump to threads | **lead**: on while a lead is thinking |
-| Left jog | move the selection (Waiting items, threads, runs; scrolls the feed) | |
-| Right jog | scroll the selected item's detail, the thread, or the feed | |
+| Left jog | move the selection, as ↑ and ↓ (in an open item, scroll it) | |
+| Right jog | a page up or down | |
+| Browse push | **open** the selection (Enter) | |
+| LOAD 1 | **back** (Esc) | |
+| LOAD 2 | read the Hive now | |
+| IN / OUT, left | pick among the selected Waiting item's answers, as ← and → | |
+| SYNC left | **answer** with the answer picked (press twice) | on when one is picked; fast while waiting for the second press |
+| SYNC right | | **driving**: on while the deck drives a control center |
 | Browse knob | pick the project for hold, lift, re-run, retry and the main lights | |
-| Browse push | read the Hive now | |
 | CUE (either deck) | cancel a press that's waiting for its second press | blinks fast while one waits |
 | PLAY left | | **connected**: on while the Hive answers |
 | PLAY right | | **lead** thinking |
@@ -39,10 +44,10 @@ Every pad does the same thing in any pad mode (HOT CUE, PAD FX, BEAT JUMP, SAMPL
 
 ### The second press
 
-Approve and refuse arm on the first press. The pad blinks fast, and the deck's screen says what the second press will do. A second press of the **same pad** on the **same item** within 4 seconds (`confirm_seconds`) sends the answer. Any of these cancels the armed press:
+Approve, refuse and answer arm on the first press. The pad blinks fast, and the deck's screen says what the second press will do. A second press of the **same pad** on the **same item** within 4 seconds (`confirm_seconds`) sends the answer. Any of these cancels the armed press:
 
 - another button
-- moving the selection
+- moving the selection, on the deck or in the control center
 - CUE
 - the item being answered elsewhere
 - the time running out
@@ -59,6 +64,7 @@ Anything that's always yours (a merge, a step past an agent's reach, a release, 
 
 | Control | Endpoint |
 |---|---|
+| Moves, views, open and back | `/api/ui`, which every open control center follows |
 | Answers | `/api/answer`, the control center's Waiting call |
 | Hold and lift | `/api/hold`. The daemon takes that only with your token, never a module's. |
 | Retry | `/api/task/retry` |
@@ -68,9 +74,20 @@ The worker limit, routes and re-running checks should go **through the same ops 
 - **Worker limit and routes** go through Settings' own route: `/api/config`, read, change, write back. Each change also puts a line on the journal (`module.reported`: "the person set max_workers from 3 to 5 from the deck").
 - **Re-running checks** says it needs `/api/op`. Retry works today.
 
+## Driving the control center
+
+The control center (`hive`, or `hive remote <host>`) is the screen; the deck is its keys. Every move goes to the daemon as `POST /api/ui` with your token, and each open control center acts on it as the keys it stands for, so the deck does there what your keys would: `↓` at the end of a chat's threads lands in the reply box, Enter opens a task or a run, Esc goes back. The control center reports where it is within about 1.5 seconds, and the deck reads that (`GET /api/ui`) a few times a second to light its view pads and to know what is selected. The control center's hint line shows `⌁ deck pad.r.4: view agents` for each.
+
+- **Answers act on what you see.** Approve, refuse and answer take the Waiting item the control center has selected, by its id, and send it through `/api/answer`. While the control center hasn't shown the deck's last move yet, they do nothing and say so, so a press right after a jog never answers the item you were on before. A confirm armed on an item is dropped when the control center moves off it, by the deck or by your keys.
+- **Re-run and retry** take the task selected in the control center (in the agents view or the dashboard), or the Waiting item's task, else the project's newest that fits.
+- **A view pad may name any of the control center's views**: `chats`, `threads`, `thread`, `dashboard`, `agents`, `waiting`, `feedback`, `knowledge`, `modules`, `settings`. `feed` and `runs` are the dashboard and agents. Its light is `view.<name>`.
+- **No control center open?** The deck moves its own view, as before. The daemon keeps the last view a control center reported, so the deck only knows one is gone when a move isn't shown within 5 seconds; it then says *no control center is following* and moves its own view until one moves again. A Hive from before `/api/ui` says so, and its `hive update` fixes it.
+
+Steering is the person's: the daemon takes `/api/ui` only with your token, never a module's.
+
 ## The screen
 
-`deck` draws its own view in the terminal. The header shows the project, main, Waiting, checks and the worker limit. Below that are tabs for waiting, feed, threads and runs, the selection, and what the deck last did. The jogs move this view. The control center keeps its own, and a seam for the deck to drive the control center's views directly would be a later change to the Hive. Use `--plain` to print one line per action instead.
+`deck` draws its own view in the terminal. The header shows the project, main, Waiting, checks and the worker limit. Below that are tabs for waiting, feed, threads and runs, a line saying whether the deck is driving a control center and what's selected there, the selection, and what the deck last did. While a control center is open this view follows it; with none, the jogs move this one. Use `--plain` to print one line per action instead.
 
 ## Running it
 
@@ -142,17 +159,19 @@ A binding is `{"do": "<action>", ...}`:
 
 | Action | Takes |
 |---|---|
-| `approve`, `refuse` | `confirm` (only honored for questions) |
-| `select` | `step` for a pad, `per` (ticks per step) for a jog |
-| `scroll` | `per` for a jog |
-| `view` | `view`: waiting, feed, threads or runs |
+| `approve`, `refuse`, `answer` | `confirm` (only honored for questions) |
+| `select`, `page` | `step` for a pad, `per` (ticks per step) for a jog |
+| `scroll` | `per` for a jog (in the control center, a page) |
+| `pick` | `step` (-1 left, 1 right) for a pad, `per` for a jog |
+| `open`, `back` | |
+| `view` | `view`: waiting, feed, threads, runs, or any of the control center's views |
 | `project` | |
 | `hold`, `lift`, `rerun`, `retry` | `confirm` |
 | `workers` | `min`, `max` |
 | `route` | `role`, `models` |
 | `cancel`, `refresh`, `nothing` | |
 
-`lights` maps a lit control to a signal: `main.green`, `main.red`, `asks`, `gate`, `lead`, `connected`, `held`, `approve`, `refuse`, `armed`, or `view.<name>`.
+`lights` maps a lit control to a signal: `main.green`, `main.red`, `asks`, `gate`, `lead`, `connected`, `held`, `approve`, `refuse`, `answer`, `armed`, `steering`, or `view.<name>`.
 
 ## The surface, kept apart from the actions
 
@@ -171,6 +190,7 @@ The FLX4 profile comes from Pioneer's MIDI message list, the layout the FLX4 sha
 
 - a fake MIDI device feeds raw FLX4 messages through the profile into the engine, against a fake Hive
 - that covers the mapping and its checks, the confirm rule (second press, lapse, cancel, never one-touch for what's always yours), the lights (first flush, only changes after, blink phases), soft takeover and settling, and dry runs
-- the HTTP client runs against a stand-in daemon: token, errors, the missing `/api/op`, config write-back, following a restart's new token
+- the HTTP client runs against a stand-in daemon: token, errors, the missing `/api/op` and `/api/ui`, config write-back, following a restart's new token
+- driving the control center: what each control sends, the lights following its reported view (and lit at once on a view pad), answers taking its selection and waiting until it has shown the last move, a confirm dropped when it moves off the item, a control center that stops following let go, and the deck's own view when none is open
 - a test fails if the layout picture has drifted from the mapping
 - `deck check` runs against the fake device: every control heard, one missing, a message the profile doesn't know, lights named as dark, and the deck unplugged

@@ -32,7 +32,7 @@ type Mapping struct {
 // Binding is what one control does.
 type Binding struct {
 	Do      string   `json:"do"`
-	Step    int      `json:"step,omitempty"`    // select: how far a press moves (default 1)
+	Step    int      `json:"step,omitempty"`    // select, page, pick: how far and which way a press moves (default 1)
 	View    string   `json:"view,omitempty"`    // view: which one
 	Per     int      `json:"per,omitempty"`     // jog: ticks per step (default 4)
 	Min     int      `json:"min,omitempty"`     // workers: the fader's bottom
@@ -47,9 +47,14 @@ var (
 	Actions = map[string]string{
 		"approve": "answer the selected Waiting item with its first option (yes, merge, run, install...)",
 		"refuse":  "answer the selected Waiting item with its second option (no, leave open, decline...)",
+		"answer":  "answer the selected Waiting item with the answer picked in the control center",
 		"select":  "move the selection in the current view (a press moves by step; a jog by its turn)",
-		"scroll":  "scroll the feed, the selected thread, or the selected item's detail",
-		"view":    "jump to a view: waiting, feed, threads, runs",
+		"scroll":  "scroll the feed, the selected thread, or the selected item's detail; in the control center, a page",
+		"page":    "move the selection a page (a press by step; a jog by its turn)",
+		"pick":    "pick among the selected Waiting item's answers in the control center (left and right)",
+		"open":    "open the control center's selection (Enter)",
+		"back":    "go back up a level in the control center (Esc)",
+		"view":    "jump to a view: waiting, feed, threads, runs, or any of the control center's",
 		"project": "pick the project that hold, lift, rerun, retry and the main light are about",
 		"hold":    "hold the project's merges",
 		"lift":    "lift the project's merge hold",
@@ -61,8 +66,11 @@ var (
 		"refresh": "read the Hive's state now",
 		"nothing": "do nothing (keeps a control quiet in dry runs)",
 	}
-	Views   = []string{"waiting", "feed", "threads", "runs"}
-	Signals = map[string]string{
+	Views = []string{"waiting", "feed", "threads", "runs"} // the deck's own screen
+	// ControlViews are the control center's views, which a view pad may name
+	// too. The deck's feed and runs are its dashboard and agents.
+	ControlViews = []string{"chats", "threads", "thread", "dashboard", "agents", "waiting", "feedback", "knowledge", "modules", "settings"}
+	Signals      = map[string]string{
 		"main.green":   "on while the project's main passed its last measure",
 		"main.red":     "blinks while the project's main failed its last measure",
 		"asks":         "blinks while anything waits on the person",
@@ -72,11 +80,24 @@ var (
 		"held":         "on while the project's merges are held",
 		"approve":      "on when the selected item can be approved; fast while it waits for the confirm",
 		"refuse":       "on when the selected item can be refused; fast while it waits for the confirm",
+		"answer":       "on when the selected item has an answer picked in the control center; fast while it waits for the confirm",
+		"steering":     "on while the deck drives an open control center",
 		"armed":        "fast while any press waits for its confirm",
 		"view.waiting": "on in the waiting view", "view.feed": "on in the feed view",
 		"view.threads": "on in the threads view", "view.runs": "on in the runs view",
 	}
 )
+
+func init() {
+	for _, v := range ControlViews {
+		if _, ok := Signals["view."+v]; !ok {
+			Signals["view."+v] = "on while the control center shows " + v
+		}
+	}
+}
+
+// viewOK is whether a view pad may name v.
+func viewOK(v string) bool { return slices.Contains(Views, v) || slices.Contains(ControlViews, v) }
 
 // LoadMapping reads a mapping file, or the default with path "".
 func LoadMapping(path string) (*Mapping, error) {
@@ -126,7 +147,8 @@ func (m *Mapping) Check(p *surface.Profile) error {
 		want := map[string][]string{
 			"workers": {surface.Absolute}, "route": {surface.Absolute},
 			"project": {surface.Relative, surface.Button}, "scroll": {surface.Relative, surface.Button},
-			"select": {surface.Relative, surface.Button},
+			"select": {surface.Relative, surface.Button}, "page": {surface.Relative, surface.Button},
+			"pick": {surface.Relative, surface.Button},
 		}[b.Do]
 		if want == nil {
 			want = []string{surface.Button}
@@ -137,8 +159,8 @@ func (m *Mapping) Check(p *surface.Profile) error {
 		if !slices.Contains(want, c.Type) {
 			errs = append(errs, fmt.Sprintf("%s: %s needs a %s control, and this is a %s", name, b.Do, strings.Join(want, " or "), c.Type))
 		}
-		if b.Do == "view" && !slices.Contains(Views, b.View) {
-			errs = append(errs, fmt.Sprintf("%s: no view %q (views: %s)", name, b.View, strings.Join(Views, ", ")))
+		if b.Do == "view" && !viewOK(b.View) {
+			errs = append(errs, fmt.Sprintf("%s: no view %q (views: %s, %s)", name, b.View, strings.Join(Views[1:], ", "), strings.Join(ControlViews, ", ")))
 		}
 		if b.Do == "route" && b.Role == "" {
 			errs = append(errs, fmt.Sprintf("%s: route needs a role (lead, worker, reviewer, sweep, ...)", name))

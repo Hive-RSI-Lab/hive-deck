@@ -48,6 +48,17 @@ type Engine struct {
 	thread []hive.Message
 	chat   string
 
+	// The control center the deck drives: where it last said it was, whether
+	// this Hive has /api/ui, and the last command sent that it hasn't shown yet.
+	ui       *hive.UIView
+	noUI     bool
+	saidNoUI bool
+	uiWant   int64     // the seq of the last move sent
+	uiSentAt time.Time // when it was sent
+	uiView   string    // the view it asked for, lit until the control center shows it
+	uiStale  bool      // a move went unshown: no control center is following
+	now      time.Time
+
 	pending map[string]pend // a fader or knob's value waiting to settle
 	holds   map[string]int  // the value the Hive holds that the control has picked up
 	lastPos map[string]int  // each fader and knob's last position, for picking up
@@ -119,6 +130,133 @@ func (e *Engine) Poll() {
 	if e.view == "threads" {
 		e.loadThread()
 	}
+	e.noUI = false // a Hive updated since says so again
+	e.PollUI()
+}
+
+// PollUI reads where the control center is. The deck drives it while one is
+// open; with none, or a Hive without /api/ui, it moves its own view.
+func (e *Engine) PollUI() {
+	if e.noUI || !e.connected {
+		return
+	}
+	v, err := e.h.UIView()
+	if errors.Is(err, hive.ErrNoUI) {
+		if e.ui != nil || !e.saidNoUI {
+			e.say(err.Error())
+			e.saidNoUI = true
+		}
+		e.noUI, e.ui = true, nil
+		return
+	}
+	if err == nil {
+		e.SetUI(v)
+	}
+}
+
+// SetUI takes the control center's view as it reported it: the deck's own
+// view and Waiting selection follow it, and a confirm armed on an item the
+// control center has moved off is dropped.
+func (e *Engine) SetUI(v *hive.UIView) {
+	was := e.Driving()
+	if v != nil && (e.ui == nil || v.At.After(e.ui.At)) {
+		e.uiStale = false // a control center moved: one is open
+	}
+	e.ui = v
+	if e.Driving() != was {
+		if was {
+			e.say("no control center is following: the deck moves its own view")
+		} else {
+			e.say(strings.TrimSpace("driving the control center " + v.By))
+		}
+	}
+	if !e.Driving() {
+		return
+	}
+	if own := fromControl(e.uiShown()); own != "" && own != e.view {
+		e.setView(own)
+	}
+	if e.armed != nil && strings.HasPrefix(e.armed.key, "answer:") {
+		if a, ok := e.selected(); !ok || a.ID != strings.SplitN(e.armed.key, ":", 3)[1] {
+			e.say("cancelled: " + e.armed.desc + " (the control center moved off it)")
+			e.armed = nil
+		}
+	}
+}
+
+// Driving reports whether the deck drives an open control center rather
+// than its own view.
+func (e *Engine) Driving() bool { return e.ui != nil && e.ui.View != "" && !e.uiStale }
+
+// caughtUp is whether the control center has shown every move the deck sent,
+// so its selection is the one the person sees.
+func (e *Engine) caughtUp() bool { return e.ui != nil && e.ui.Applied >= e.uiWant }
+
+// uiShown is the view the control center shows, or the one the deck just
+// asked for until it does.
+func (e *Engine) uiShown() string {
+	if e.uiView != "" && !e.caughtUp() {
+		return e.uiView
+	}
+	return e.ui.View
+}
+
+// toControl is a view as the control center names it.
+func toControl(v string) string {
+	switch v {
+	case "feed":
+		return "dashboard"
+	case "runs":
+		return "agents"
+	}
+	return v
+}
+
+// fromControl is the deck's own view for one of the control center's, ""
+// for one the deck's screen doesn't have.
+func fromControl(v string) string {
+	switch v {
+	case "dashboard":
+		return "feed"
+	case "agents":
+		return "runs"
+	case "chats", "threads", "thread":
+		return "threads"
+	case "waiting":
+		return "waiting"
+	}
+	return ""
+}
+
+// steer sends a command to the control center, as the keys it stands for.
+func (e *Engine) steer(ctrl string, c hive.UICommand, desc string) {
+	c.Client, c.Control = "deck", ctrl
+	if e.armed != nil && c.Action != "answer" {
+		e.say("cancelled: " + e.armed.desc)
+		e.armed = nil
+	}
+	if e.dry {
+		e.say("would " + desc + " in the control center")
+		return
+	}
+	seq, err := e.h.UI(c)
+	switch {
+	case errors.Is(err, hive.ErrNoUI):
+		e.noUI, e.ui = true, nil
+		e.say(err.Error())
+		return
+	case err != nil:
+		e.say(desc + ": " + err.Error())
+		return
+	}
+	e.uiWant, e.uiSentAt = seq, e.now // a restarted daemon counts from 1 again
+	e.uiView = ""
+	if c.Action == "view" {
+		e.uiView = c.View
+		if own := fromControl(c.View); own != "" {
+			e.setView(own)
+		}
+	}
 }
 
 // SetState takes a fresh read of the Hive: the selection follows its item,
@@ -141,8 +279,12 @@ func (e *Engine) SetState(st hive.State) {
 	}
 }
 
-// selected is the selected Waiting item.
+// selected is the selected Waiting item: the control center's while the
+// deck drives one, and none while it hasn't shown the deck's last move.
 func (e *Engine) selected() (hive.Ask, bool) {
+	if e.Driving() {
+		return e.uiAsk()
+	}
 	asks := e.st.Pending()
 	if len(asks) == 0 {
 		e.selAsk = ""
@@ -159,8 +301,28 @@ func (e *Engine) selected() (hive.Ask, bool) {
 	return asks[i], true
 }
 
+func (e *Engine) uiAsk() (hive.Ask, bool) {
+	v := e.ui
+	if !e.caughtUp() || v.View != "waiting" || v.Item == "" {
+		return hive.Ask{}, false
+	}
+	for _, a := range e.st.Pending() {
+		if a.ID == v.Item {
+			e.selAsk = a.ID
+			return a, true
+		}
+	}
+	if v.Detail != "" {
+		return hive.Ask{}, false
+	}
+	// Not in the deck's read of the Hive yet. Its kind is unknown, so it
+	// takes the second press whatever the mapping says.
+	return hive.Ask{ID: v.Item, Title: v.Title, Options: v.Options}, true
+}
+
 // Handle acts on one control's event.
 func (e *Engine) Handle(ev surface.Event, now time.Time) {
+	e.now = now
 	b, ok := e.m.Controls[ev.Control]
 	if !ok {
 		if ev.Type != surface.Button || ev.Pressed {
@@ -190,7 +352,7 @@ func (e *Engine) Handle(ev surface.Event, now time.Time) {
 		steps := e.jog[ev.Control] / per
 		e.jog[ev.Control] %= per
 		if steps != 0 {
-			e.move(b, steps)
+			e.move(ev.Control, b, steps)
 		}
 	case surface.Absolute:
 		e.absolute(ev.Control, b, ev.Value, now)
@@ -199,16 +361,31 @@ func (e *Engine) Handle(ev surface.Event, now time.Time) {
 
 func (e *Engine) press(ctrl string, b Binding, now time.Time) {
 	switch b.Do {
-	case "approve", "refuse":
-		e.answer(ctrl, b, b.Do == "approve", now)
-	case "select", "scroll", "project":
+	case "approve", "refuse", "answer":
+		e.answer(ctrl, b, now)
+	case "select", "scroll", "project", "page", "pick":
 		step := b.Step
 		if step == 0 {
 			step = 1
 		}
-		e.move(b, step)
+		e.move(ctrl, b, step)
 	case "view":
-		e.setView(b.View)
+		if e.Driving() {
+			e.steer(ctrl, hive.UICommand{Action: "view", View: toControl(b.View)}, "show "+toControl(b.View))
+			return
+		}
+		own := fromControl(toControl(b.View))
+		if own == "" {
+			e.say("no control center is open to show " + b.View + ": start hive")
+			return
+		}
+		e.setView(own)
+	case "open", "back":
+		if !e.Driving() {
+			e.say("no control center is open to " + b.Do + " in: start hive")
+			return
+		}
+		e.steer(ctrl, hive.UICommand{Action: b.Do}, b.Do)
 	case "hold", "lift":
 		if e.project == "" {
 			e.say("no project to " + b.Do)
@@ -277,20 +454,40 @@ func need(b Binding, answer bool) bool {
 	return answer
 }
 
-func (e *Engine) answer(ctrl string, b Binding, approve bool, now time.Time) {
+func (e *Engine) answer(ctrl string, b Binding, now time.Time) {
 	a, ok := e.selected()
-	if !ok {
+	switch {
+	case !ok && e.Driving() && !e.caughtUp():
+		e.say("the control center hasn't shown the last move yet: press again once it has")
+		return
+	case !ok && e.Driving():
+		e.say("select a Waiting item in the control center first")
+		return
+	case !ok:
 		e.say("nothing is waiting")
 		return
 	}
-	ans, ok := Option(a, approve)
-	if !ok {
+	var ans string
+	if b.Do == "answer" {
+		if ans, ok = e.picked(a); !ok {
+			e.say("pick an answer in the control center first")
+			return
+		}
+	} else if ans, ok = Option(a, b.Do == "approve"); !ok {
 		e.say(fmt.Sprintf("%q takes only %s: approve it", clip(a.Title, 50), strings.Join(a.Options, " or ")))
 		return
 	}
 	confirm := need(b, true) || AlwaysPersons(a.Kind)
 	desc := fmt.Sprintf("answer %s %q with %q", a.Kind, clip(a.Title, 50), ans)
 	e.confirmThen(ctrl, confirm, "answer:"+a.ID+":"+ans, desc, now, func() error { return e.h.Answer(a.ID, ans, "answered from the deck") })
+}
+
+// picked is the answer picked for a in the control center.
+func (e *Engine) picked(a hive.Ask) (string, bool) {
+	if !e.Driving() || e.ui.Item != a.ID || e.ui.Option < 0 || e.ui.Option >= len(e.ui.Options) {
+		return "", false
+	}
+	return e.ui.Options[e.ui.Option], true
 }
 
 // Option is the answer approve or refuse gives an ask: its first or second
@@ -343,9 +540,16 @@ func (e *Engine) task(fits func(hive.Task) bool) (hive.Task, bool) {
 	for _, p := range e.st.Projects {
 		all = append(all, p.Tasks...)
 	}
-	if a, ok := e.selected(); ok && e.view == "waiting" {
+	var ids []string
+	if e.Driving() && e.caughtUp() {
+		ids = append(ids, e.ui.Item) // a task or run selected in the control center
+	}
+	if a, ok := e.selected(); ok && (e.Driving() || e.view == "waiting") {
+		ids = append(ids, a.Ref)
+	}
+	for _, id := range ids {
 		for _, t := range all {
-			if t.ID == a.Ref && fits(t) {
+			if id != "" && t.ID == id && fits(t) {
 				return t, true
 			}
 		}
@@ -388,9 +592,32 @@ func (e *Engine) loadThread() {
 	e.thread, e.chat = ms, id
 }
 
-// move is a jog's or a pad's step: the selection, the scroll, or the project.
-func (e *Engine) move(b Binding, steps int) {
+// move is a jog's or a pad's step: the selection, the scroll, or the
+// project. While the deck drives the control center, it moves that.
+func (e *Engine) move(ctrl string, b Binding, steps int) {
+	if b.Do != "project" && e.Driving() {
+		n := min(abs(steps), 100)
+		var c hive.UICommand
+		switch b.Do {
+		case "select":
+			c = hive.UICommand{Action: dir(steps, "up", "down"), N: n}
+		case "scroll", "page":
+			c = hive.UICommand{Action: dir(steps, "pageup", "pagedown"), N: n}
+		case "pick":
+			c = hive.UICommand{Action: dir(steps, "left", "right")}
+		}
+		desc := c.Action
+		if c.N > 1 {
+			desc = fmt.Sprintf("%s ×%d", c.Action, c.N)
+		}
+		e.steer(ctrl, c, desc)
+		return
+	}
 	switch b.Do {
+	case "pick":
+		e.say("no control center is open to pick an answer in: start hive")
+	case "page":
+		e.move(ctrl, Binding{Do: "select"}, steps*10)
 	case "project":
 		names := e.projects()
 		if len(names) == 0 {
@@ -426,6 +653,20 @@ func (e *Engine) move(b Binding, steps int) {
 			e.loadThread()
 		}
 	}
+}
+
+func dir(steps int, neg, pos string) string {
+	if steps < 0 {
+		return neg
+	}
+	return pos
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func (e *Engine) count() int {
@@ -553,6 +794,10 @@ func orNone(s string) string {
 // Tick sends faders and knobs that have settled and drops a confirm that
 // waited too long.
 func (e *Engine) Tick(now time.Time) {
+	if e.Driving() && !e.caughtUp() && !e.uiSentAt.IsZero() && now.Sub(e.uiSentAt) > uiPatience {
+		e.uiStale, e.uiWant = true, 0
+		e.say("no control center is following: the deck moves its own view")
+	}
 	if e.armed != nil && now.Sub(e.armed.at) > time.Duration(e.m.ConfirmSeconds*float64(time.Second)) {
 		e.say("no second press: " + e.armed.desc + " not done")
 		e.armed = nil
@@ -634,6 +879,10 @@ func (e *Engine) viaConfig(what string, change func(map[string]any)) error {
 	return e.h.Note("the person set " + what + " from the deck")
 }
 
+// uiPatience is how long the control center has to show a move before the
+// deck takes it that none is open (it reports within about 1.5 seconds).
+const uiPatience = 5 * time.Second
+
 // Light levels.
 const (
 	Off = iota
@@ -679,20 +928,29 @@ func (e *Engine) Signal(name string) int {
 		}
 	case "held":
 		return lv(proj.Hold != nil)
-	case "approve", "refuse":
+	case "approve", "refuse", "answer":
 		if armedOn(name) {
 			return Fast
 		}
 		if a, ok := e.selected(); ok {
 			_, can := Option(a, name == "approve")
+			if name == "answer" {
+				_, can = e.picked(a)
+			}
 			return lv(can)
 		}
+	case "steering":
+		return lv(e.Driving())
 	case "armed":
 		if e.armed != nil {
 			return Fast
 		}
 	default:
 		if v, ok := strings.CutPrefix(name, "view."); ok {
+			if e.Driving() {
+				cur := e.uiShown()
+				return lv(toControl(v) == cur || v == "threads" && (cur == "chats" || cur == "thread"))
+			}
 			return lv(e.view == v)
 		}
 	}
@@ -787,6 +1045,13 @@ func Describe(b Binding) string {
 		return "move the selection"
 	case "view":
 		return "jump to the " + b.View + " view"
+	case "page":
+		return "move the selection a page " + dir(b.Step, "up", "down")
+	case "pick":
+		if b.Step != 0 {
+			return "pick the " + dir(b.Step, "previous", "next") + " answer in the control center"
+		}
+		return Actions[b.Do]
 	case "workers":
 		top := b.Max
 		if top == 0 {

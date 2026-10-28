@@ -22,9 +22,14 @@
     "pad.r.8": {"do": "view", "view": "threads"},
 
     "jog.l": {"do": "select", "per": 6},
-    "jog.r": {"do": "scroll", "per": 3},
+    "jog.r": {"do": "scroll", "per": 10},
     "browse": {"do": "project"},
-    "browse.push": {"do": "refresh"},
+    "browse.push": {"do": "open"},
+    "load.l": {"do": "back"},
+    "load.r": {"do": "refresh"},
+    "loopin.l": {"do": "pick", "step": -1},
+    "loopout.l": {"do": "pick", "step": 1},
+    "sync.l": {"do": "answer"},
     "cue.l": {"do": "cancel"},
     "cue.r": {"do": "cancel"},
 
@@ -50,6 +55,8 @@
     "play.l": "connected",
     "play.r": "lead",
     "cue.l": "armed",
-    "cue.r": "armed"
+    "cue.r": "armed",
+    "sync.l": "answer",
+    "sync.r": "steering"
   }
 }

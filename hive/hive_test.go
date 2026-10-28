@@ -18,6 +18,7 @@ type daemon struct {
 	token string
 	calls []string
 	op    bool // has /api/op
+	ui    bool // has /api/ui
 	cfg   map[string]any
 }
 
@@ -39,6 +40,16 @@ func (d *daemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, `{"routed":"worker"}`)
+	case "/api/ui":
+		if !d.ui {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodPost {
+			fmt.Fprint(w, `{"seq":13,"action":"down"}`)
+			return
+		}
+		fmt.Fprint(w, `{"seq":12,"commands":[],"view":{"by":"tower pid 4242","view":"waiting","focus":"main","sel":1,"rows":3,"item":"a1","title":"Merge?","options":["merge","leave open"],"option":1,"applied":12}}`)
 	case "/api/config":
 		if r.Method == http.MethodPost {
 			d.cfg = body
@@ -106,6 +117,40 @@ func TestClientCallsThePersonsAPI(t *testing.T) {
 	}
 	if bad := Remote(srv.URL, "wrong"); bad.Answer("a1", "merge", "") == nil {
 		t.Fatal("a wrong token got through")
+	}
+}
+
+func TestClientDrivesTheControlCenter(t *testing.T) {
+	d := &daemon{token: "secret"}
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	c := Remote(srv.URL, "secret")
+	if _, err := c.UIView(); !errors.Is(err, ErrNoUI) {
+		t.Fatalf("a daemon without /api/ui: %v", err)
+	}
+	if _, err := c.UI(UICommand{Action: "down"}); !errors.Is(err, ErrNoUI) {
+		t.Fatalf("a daemon without /api/ui: %v", err)
+	}
+	d.ui = true
+	v, err := c.UIView()
+	if err != nil || v == nil || v.View != "waiting" || v.Item != "a1" || v.Option != 1 || len(v.Options) != 2 {
+		t.Fatalf("view: %+v %v", v, err)
+	}
+	if seq, err := c.UI(UICommand{Action: "down", N: 3, Client: "deck", Control: "jog.l"}); err != nil || seq != 13 {
+		t.Fatal(seq, err)
+	}
+	if _, err := c.UI(UICommand{Action: "view", View: "agents", Client: "deck", Control: "pad.r.4"}); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(d.calls, "\n")
+	for _, w := range []string{
+		`GET /api/ui null`,
+		`POST /api/ui {"action":"down","client":"deck","control":"jog.l","n":3}`,
+		`POST /api/ui {"action":"view","client":"deck","control":"pad.r.4","view":"agents"}`,
+	} {
+		if !strings.Contains(all, w) {
+			t.Errorf("no call %s in\n%s", w, all)
+		}
 	}
 }
 

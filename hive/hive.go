@@ -191,6 +191,13 @@ type Hive interface {
 	// Note puts a line on the Hive's journal (module.reported) saying what
 	// the deck did, for changes that have no op of their own yet.
 	Note(text string) error
+	// UI sends a command to the open control center (POST /api/ui); ErrNoUI
+	// means this Hive doesn't have that seam.
+	// It returns the command's seq, which the view's Applied reaches once
+	// the control center has acted on it.
+	UI(cmd UICommand) (int64, error)
+	// UIView is where the control center is, nil if none has said.
+	UIView() (*UIView, error)
 }
 
 // ErrNoOp is returned when the daemon has no /api/op.
@@ -425,4 +432,62 @@ func (c *Client) SetConfig(change func(map[string]any)) error {
 
 func (c *Client) Note(text string) error {
 	return c.call("POST", "/api/module/report", map[string]string{"from": "deck", "text": text}, nil)
+}
+
+// UICommand is one command to the control center (POST /api/ui): the keys
+// it stands for, as the person's own would be.
+type UICommand struct {
+	Seq     int64  `json:"seq,omitempty"`
+	Action  string `json:"action"`            // up, down, left, right, pageup, pagedown, view, open, back, answer
+	N       int    `json:"n,omitempty"`       // up, down, pageup, pagedown: how many steps
+	View    string `json:"view,omitempty"`    // view: which one
+	Answer  string `json:"answer,omitempty"`  // answer: an option of the selected Waiting item
+	Client  string `json:"client,omitempty"`  // "deck", for the control center's hint line
+	Control string `json:"control,omitempty"` // the control that sent it
+}
+
+// UIView is where the control center is, as it last reported (GET /api/ui).
+type UIView struct {
+	By      string    `json:"by,omitempty"`
+	At      time.Time `json:"at"`
+	View    string    `json:"view"`             // chats, threads, thread, dashboard, agents, waiting, feedback, knowledge, modules, settings
+	Focus   string    `json:"focus"`            // sidebar, main or thread
+	Chat    string    `json:"chat,omitempty"`   // the open chat
+	Detail  string    `json:"detail,omitempty"` // the kind of an item opened on top (task, run, diff...)
+	Sel     int       `json:"sel"`              // the selected row, -1 for none; in an open item, its scroll
+	Rows    int       `json:"rows"`
+	Item    string    `json:"item,omitempty"` // the selection's id
+	Title   string    `json:"title,omitempty"`
+	Options []string  `json:"options,omitempty"` // a Waiting item's answers
+	Option  int       `json:"option"`            // the one picked
+	Applied int64     `json:"applied"`
+}
+
+// ErrNoUI is returned when the daemon has no /api/ui (a Hive from before it).
+var ErrNoUI = errors.New("this Hive has no /api/ui yet: run its hive update for the deck to drive the control center")
+
+// UI sends one command to every open control center, and returns its seq.
+func (c *Client) UI(cmd UICommand) (int64, error) {
+	var out UICommand
+	err := c.call("POST", "/api/ui", cmd, &out)
+	var se *statusErr
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return 0, ErrNoUI
+	}
+	return out.Seq, err
+}
+
+// UIView is the control center's view as last reported; nil when none has
+// reported since the daemon started.
+func (c *Client) UIView() (*UIView, error) {
+	var out struct {
+		Seq  int64   `json:"seq"`
+		View *UIView `json:"view"`
+	}
+	err := c.call("GET", "/api/ui", nil, &out)
+	var se *statusErr
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return nil, ErrNoUI
+	}
+	return out.View, err
 }
