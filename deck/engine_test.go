@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -293,6 +294,28 @@ func TestRouteKnob(t *testing.T) {
 	e.Tick(t0.Add(time.Second))
 	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"qwen","role":"worker"}` {
 		t.Fatalf("route: %v", c)
+	}
+}
+
+// A route the knob has no stop for (cur == -1) can't be picked up by
+// passing it, so the knob acts on its first move, with no pickup prompt.
+func TestRouteKnobOffItsStops(t *testing.T) {
+	st := waiting()
+	st.Config.Routes = map[string][]string{"worker": {"codex:gpt-5"}}
+	e, h, _, p := setup(t, "", st, false)
+	b := e.m.Controls["knob.l.hi"]
+	if cur := slices.Index(e.Choices(b), e.route("worker")); cur != -1 {
+		t.Fatalf("the route is on the knob: %d", cur)
+	}
+	press(t, e, p, t0, midi.Msg{0xB0, 0x07, 0x7F}) // qwen
+	e.Tick(t0.Add(time.Second))
+	if c := h.take(); len(c) != 1 || c[0] != `op route {"models":"qwen","role":"worker"}` {
+		t.Fatalf("route off the knob's stops: %v %v", c, e.Log())
+	}
+	for _, l := range e.Log() {
+		if strings.Contains(l, "pick it up") {
+			t.Fatalf("asked for a pickup: %q", l)
+		}
 	}
 }
 
