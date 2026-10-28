@@ -93,7 +93,19 @@ On Linux the deck opens `/dev/snd/midiC*D*`, so your user needs to be in the `au
 
 **A Hive on this machine:** the deck finds the workspace as the `hive` command does (`$HIVE_HOME`, the installer's pointer, or `~/hive`). It reads the daemon's port and your token from `.hive/private/daemon.json`, and follows a restart to its new token.
 
-**A Hive elsewhere:** tunnel to its daemon and give the deck that Hive's `daemon.json`, or the token alone:
+**A Hive elsewhere:** name its machine, as you would to `ssh` (a host, `you@host`, or a `Host` from `~/.ssh/config`):
+
+```sh
+deck --ssh you@hive-host
+```
+
+One ssh login does it all, as the Hive's own `hive remote` does: ssh runs `hive remote-info --follow` there, which prints that Hive's `daemon.json` and again whenever a restart changes its port or token, and opens a SOCKS proxy on your machine's loopback that the deck reaches the daemon through. So when the Hive restarts, the deck picks up the new port and token on its own; while it's down the screen says *can't reach the Hive* and the deck carries on when it's back; if ssh itself drops (a sleep, a network change), the deck dials it again, waiting a little longer after each failed try, up to 30 seconds.
+
+- It runs the `ssh` on your PATH: OpenSSH on Linux and macOS, and on Windows the built-in `ssh.exe` (Settings → Optional features → OpenSSH Client).
+- The first login can ask for a password or passphrase as usual. Redials run with `BatchMode`, so they can't ask on the deck's screen: use a key with `ssh-agent` (on Windows, the *OpenSSH Authentication Agent* service) for the deck to reconnect on its own.
+- If `hive` isn't on that machine's PATH or in `~/.local/bin`, name it: `--hive /path/to/hive`. A Hive too old for `hive remote-info` says so; run its `hive update`.
+
+Or tunnel by hand and give the deck an address and that Hive's `daemon.json` (or the token alone); this one doesn't follow a restart:
 
 ```sh
 ssh -N -L 7777:127.0.0.1:<port> you@hive-host &          # <port> is in the remote daemon.json
