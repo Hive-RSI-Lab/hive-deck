@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,7 +239,7 @@ func Workspace() string {
 
 // Local is the daemon running on this machine, from <workspace>/.hive/private/daemon.json.
 func Local(workspace string) (*Client, error) {
-	c := &Client{infoFile: filepath.Join(workspace, ".hive", "private", "daemon.json"), http: &http.Client{Timeout: 30 * time.Second}}
+	c := &Client{infoFile: filepath.Join(workspace, ".hive", "private", "daemon.json"), http: newHTTP(nil)}
 	info, err := c.readInfo()
 	if err != nil {
 		return nil, err
@@ -249,7 +250,17 @@ func Local(workspace string) (*Client, error) {
 
 // Remote is a daemon at url (http://host:port) with the person's token.
 func Remote(url, token string) *Client {
-	return &Client{info: Info{URL: strings.TrimRight(url, "/"), Token: strings.TrimSpace(token)}, http: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{info: Info{URL: strings.TrimRight(url, "/"), Token: strings.TrimSpace(token)}, http: newHTTP(nil)}
+}
+
+// newHTTP is the deck's client to the daemon. The deck keeps a read of the
+// state, a read of the control center's view and a move in flight at once,
+// so it keeps a connection open for each: a new one costs a round trip, and
+// over ssh a new channel through its proxy, on the press that needs it.
+func newHTTP(proxy func(*http.Request) (*url.URL, error)) *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy, t.MaxIdleConnsPerHost = proxy, 8
+	return &http.Client{Timeout: 30 * time.Second, Transport: t}
 }
 
 func (c *Client) readInfo() (Info, error) {

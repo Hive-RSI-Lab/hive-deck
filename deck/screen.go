@@ -48,8 +48,15 @@ func (e *Engine) Screen(width, height int) string {
 	}
 	line(strings.Join(tabs, "  "))
 	line(e.steering())
+	lag := LagLine(e.lags)
+	if lag != "" {
+		line(lag)
+	}
 	line(strings.Repeat("─", width))
 	body := height - 7 - len(e.log)
+	if lag != "" {
+		body--
+	}
 	body = max(body, 4)
 	rows := e.rows(width)
 	for i := 0; i < body; i++ {

@@ -69,7 +69,7 @@ func DialSSH(s *SSH) (*Client, error) {
 		return nil, err
 	}
 	go s.redial(ended)
-	return &Client{ssh: s, http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: s.proxyURL}}}, nil
+	return &Client{ssh: s, http: newHTTP(s.proxyURL)}, nil
 }
 
 // session runs ssh once. It returns when the Hive there has printed its
