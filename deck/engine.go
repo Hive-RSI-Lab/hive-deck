@@ -59,6 +59,15 @@ type Engine struct {
 	uiStale  bool      // a move went unshown: no control center is following
 	now      time.Time
 
+	// The outbox, while the loop runs the engine (Run): moves waiting to be
+	// sent, merged where they add up, and the one on its way.
+	async  bool
+	outbox []sending
+	flight *sending
+
+	lagging []lagging // moves the Hive took and the control center hasn't shown
+	lags    []Lag     // the last moves' times, press to lights
+
 	pending map[string]pend // a fader or knob's value waiting to settle
 	holds   map[string]int  // the value the Hive holds that the control has picked up
 	lastPos map[string]int  // each fader and knob's last position, for picking up
@@ -103,44 +112,106 @@ func (e *Engine) View() string { return e.view }
 
 // Poll reads the Hive's state and the journal since the last poll.
 func (e *Engine) Poll() {
-	st, err := e.h.State()
-	if err != nil {
-		if e.connected || !e.polled {
-			e.say("can't reach the Hive: " + err.Error())
+	e.Apply(e.Reader()())
+	if !e.async {
+		e.PollUI()
+	}
+}
+
+// Read is one read of the Hive: its state, the journal since the last read
+// and, on the threads view, the selected chat.
+type Read struct {
+	State  hive.State
+	Err    error
+	Events []hive.Event
+	Chat   string
+	Thread []hive.Message
+	sel    int // the chat's row, clamped to the chats read
+	asked  int // the threads selection when the read began
+	thread bool
+}
+
+// Reader is the next read, to run off the deck's loop: it touches only the
+// Hive, so a press never waits on a slow one. Apply takes its result.
+func (e *Engine) Reader() func() Read {
+	h, after, thread, sel := e.h, e.after, e.view == "threads", e.sel["threads"]
+	return func() Read {
+		r := Read{thread: thread, asked: sel}
+		if r.State, r.Err = h.State(); r.Err != nil {
+			return r
 		}
-		e.connected, e.lastErr, e.polled = false, err.Error(), true
+		r.Events, _ = h.Events(after)
+		if chats := r.State.Chats; thread && len(chats) > 0 {
+			r.sel = min(max(sel, 0), len(chats)-1)
+			r.Chat = chats[r.sel].ID
+			var err error
+			if r.Thread, err = h.Messages(r.Chat); err != nil {
+				r.Chat = ""
+			}
+		}
+		return r
+	}
+}
+
+// Apply takes a read of the Hive.
+func (e *Engine) Apply(r Read) {
+	if r.Err != nil {
+		if e.connected || !e.polled {
+			e.say("can't reach the Hive: " + r.Err.Error())
+		}
+		e.connected, e.lastErr, e.polled = false, r.Err.Error(), true
 		return
 	}
 	if !e.connected && e.polled {
 		e.say("the Hive answers again")
 	}
 	e.connected, e.lastErr, e.polled = true, "", true
-	e.SetState(st)
-	if evs, err := e.h.Events(e.after); err == nil {
-		for _, ev := range evs {
-			if ev.Seq > e.after {
-				e.after = ev.Seq
-			}
+	e.SetState(r.State)
+	for _, ev := range r.Events {
+		if ev.Seq <= e.after {
+			continue // a read that crossed one already taken
 		}
-		e.feed = append(e.feed, evs...)
-		if len(e.feed) > 500 {
-			e.feed = e.feed[len(e.feed)-500:]
-		}
+		e.after = ev.Seq
+		e.feed = append(e.feed, ev)
+	}
+	if len(e.feed) > 500 {
+		e.feed = e.feed[len(e.feed)-500:]
 	}
 	if e.view == "threads" {
-		e.loadThread()
+		if !r.thread {
+			e.loadThread()
+		} else if r.Chat != "" && e.sel["threads"] == r.asked {
+			// A jog during the read moved on and loaded its own chat: keep it.
+			if r.Chat != e.chat {
+				e.scroll = 0
+			}
+			e.sel["threads"], e.thread, e.chat = r.sel, r.Thread, r.Chat
+		}
 	}
 	e.noUI = false // a Hive updated since says so again
-	e.PollUI()
 }
 
 // PollUI reads where the control center is. The deck drives it while one is
 // open; with none, or a Hive without /api/ui, it moves its own view.
 func (e *Engine) PollUI() {
-	if e.noUI || !e.connected {
-		return
+	if read := e.UIReader(); read != nil {
+		v, err := read()
+		e.ApplyUI(v, err, time.Now())
 	}
-	v, err := e.h.UIView()
+}
+
+// UIReader is the next read of the control center's view, to run off the
+// deck's loop; nil when there is none to read. In the loop it doesn't wait
+// on a read of the state: the view is cheap to read when the state is slow.
+func (e *Engine) UIReader() func() (*hive.UIView, error) {
+	if e.noUI || !e.connected && !e.async {
+		return nil
+	}
+	return e.h.UIView
+}
+
+// ApplyUI takes a read of the control center's view, made at now.
+func (e *Engine) ApplyUI(v *hive.UIView, err error, now time.Time) {
 	if errors.Is(err, hive.ErrNoUI) {
 		if e.ui != nil || !e.saidNoUI {
 			e.say(err.Error())
@@ -151,6 +222,7 @@ func (e *Engine) PollUI() {
 	}
 	if err == nil {
 		e.SetUI(v)
+		e.shown(now)
 	}
 }
 
@@ -190,7 +262,9 @@ func (e *Engine) Driving() bool { return e.ui != nil && e.ui.View != "" && !e.ui
 
 // caughtUp is whether the control center has shown every move the deck sent,
 // so its selection is the one the person sees.
-func (e *Engine) caughtUp() bool { return e.ui != nil && e.ui.Applied >= e.uiWant }
+func (e *Engine) caughtUp() bool {
+	return e.ui != nil && e.flight == nil && len(e.outbox) == 0 && e.ui.Applied >= e.uiWant
+}
 
 // uiShown is the view the control center shows, or the one the deck just
 // asked for until it does.
@@ -229,6 +303,8 @@ func fromControl(v string) string {
 }
 
 // steer sends a command to the control center, as the keys it stands for.
+// Inline, it waits for the Hive to take it; run by the loop (Run), it goes
+// in the outbox the loop sends in order, and the deck carries on at once.
 func (e *Engine) steer(ctrl string, c hive.UICommand, desc string) {
 	c.Client, c.Control = "deck", ctrl
 	if e.armed != nil && c.Action != "answer" {
@@ -239,17 +315,47 @@ func (e *Engine) steer(ctrl string, c hive.UICommand, desc string) {
 		e.say("would " + desc + " in the control center")
 		return
 	}
-	seq, err := e.h.UI(c)
-	switch {
-	case errors.Is(err, hive.ErrNoUI):
-		e.noUI, e.ui = true, nil
-		e.say(err.Error())
-		return
-	case err != nil:
-		e.say(desc + ": " + err.Error())
+	s := sending{c: c, desc: desc, at: e.now}
+	if e.async {
+		e.queue(s)
+		e.asked(c)
 		return
 	}
-	e.uiWant, e.uiSentAt = seq, e.now // a restarted daemon counts from 1 again
+	start := time.Now()
+	seq, err := e.h.UI(c)
+	if e.posted(s, seq, err, e.now.Add(time.Since(start))) {
+		e.asked(c)
+	}
+}
+
+// sending is a command on its way to the control center.
+type sending struct {
+	c    hive.UICommand
+	desc string
+	at   time.Time // the press
+}
+
+// steps are the moves that add up: two jog steps down are one move of two.
+var steps = map[string]bool{"up": true, "down": true, "pageup": true, "pagedown": true}
+
+// queue puts a command in the outbox; a step behind one the same way that
+// hasn't gone yet joins it, so a fast jog is one request, not twenty.
+func (e *Engine) queue(s sending) {
+	if n := len(e.outbox); n > 0 {
+		last := &e.outbox[n-1]
+		if steps[s.c.Action] && last.c.Action == s.c.Action && max(last.c.N, 1)+max(s.c.N, 1) <= 100 {
+			last.c.N = max(last.c.N, 1) + max(s.c.N, 1)
+			last.c.Control = s.c.Control
+			last.desc = fmt.Sprintf("%s ×%d", s.c.Action, last.c.N)
+			return
+		}
+	}
+	e.outbox = append(e.outbox, s)
+}
+
+// asked is what a command does on the deck before the control center shows
+// it: a view pad lights its view at once.
+func (e *Engine) asked(c hive.UICommand) {
 	e.uiView = ""
 	if c.Action == "view" {
 		e.uiView = c.View
@@ -257,6 +363,48 @@ func (e *Engine) steer(ctrl string, c hive.UICommand, desc string) {
 			e.setView(own)
 		}
 	}
+}
+
+// Next is the next command for the loop to send, nil when none waits or one
+// is still on its way; Sent takes its answer.
+func (e *Engine) Next() *hive.UICommand {
+	if e.flight != nil || len(e.outbox) == 0 {
+		return nil
+	}
+	s := e.outbox[0]
+	e.outbox = e.outbox[1:]
+	e.flight = &s
+	return &s.c
+}
+
+// Sent takes the Hive's answer to the command Next gave, at now.
+func (e *Engine) Sent(seq int64, err error, now time.Time) {
+	if e.flight == nil {
+		return
+	}
+	s := *e.flight
+	e.flight = nil
+	if !e.posted(s, seq, err, now) && s.c.Action == "view" && e.uiView == s.c.View {
+		e.uiView = ""
+	}
+}
+
+// posted takes the Hive's answer to a command, and says whether it took it.
+func (e *Engine) posted(s sending, seq int64, err error, now time.Time) bool {
+	switch {
+	case errors.Is(err, hive.ErrNoUI):
+		e.noUI, e.ui = true, nil
+		e.outbox = nil
+		e.say(err.Error())
+		return false
+	case err != nil:
+		e.say(s.desc + ": " + err.Error())
+		return false
+	}
+	e.uiWant, e.uiSentAt = seq, now // a restarted daemon counts from 1 again
+	e.lagging = slices.DeleteFunc(e.lagging, func(l lagging) bool { return l.seq >= seq })
+	e.lagging = append(e.lagging, lagging{seq: seq, at: s.at, sent: now.Sub(s.at)})
+	return true
 }
 
 // SetState takes a fresh read of the Hive: the selection follows its item,
@@ -794,8 +942,8 @@ func orNone(s string) string {
 // Tick sends faders and knobs that have settled and drops a confirm that
 // waited too long.
 func (e *Engine) Tick(now time.Time) {
-	if e.Driving() && !e.caughtUp() && !e.uiSentAt.IsZero() && now.Sub(e.uiSentAt) > uiPatience {
-		e.uiStale, e.uiWant = true, 0
+	if e.Driving() && !e.caughtUp() && e.flight == nil && len(e.outbox) == 0 && !e.uiSentAt.IsZero() && now.Sub(e.uiSentAt) > uiPatience {
+		e.uiStale, e.uiWant, e.lagging = true, 0, nil
 		e.say("no control center is following: the deck moves its own view")
 	}
 	if e.armed != nil && now.Sub(e.armed.at) > time.Duration(e.m.ConfirmSeconds*float64(time.Second)) {
@@ -880,7 +1028,7 @@ func (e *Engine) viaConfig(what string, change func(map[string]any)) error {
 }
 
 // uiPatience is how long the control center has to show a move before the
-// deck takes it that none is open (it reports within about 1.5 seconds).
+// deck takes it that none is open (one shows a move well inside a second).
 const uiPatience = 5 * time.Second
 
 // Light levels.
@@ -1009,6 +1157,7 @@ func (e *Engine) Flush(port midi.Port, now time.Time) error {
 		e.lit[ctrl] = l
 	}
 	e.sent = true
+	e.litLags(now)
 	return nil
 }
 

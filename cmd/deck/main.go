@@ -155,50 +155,34 @@ func run(args []string) error {
 			fmt.Println("  " + l)
 		}
 	}
-	e.Poll()
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
-	tick := time.NewTicker(60 * time.Millisecond)
-	defer tick.Stop()
-	lastPoll, lastUI, lastDraw := time.Now(), time.Now(), time.Time{}
-	for {
-		select {
-		case <-stop:
-			e.Dark(port)
-			return nil
-		case line, ok := <-keys:
-			if !ok {
-				return nil
+	quit := make(chan struct{})
+	go func() { <-stop; close(quit) }()
+	events := make(chan surface.Event)
+	if keys != nil {
+		go func() {
+			defer close(events)
+			for line := range keys {
+				for _, ev := range typed(p, line) {
+					events <- ev
+				}
 			}
-			for _, ev := range typed(p, line) {
-				e.Handle(ev, time.Now())
-			}
-		case msg, ok := <-port.In():
-			if !ok {
-				return errors.New("the deck went away (unplugged?)")
-			}
-			if ev, known, _ := p.Decode(msg); known {
-				e.Handle(ev, time.Now())
-			}
-		case now := <-tick.C:
-			e.Tick(now)
-			if now.Sub(lastPoll) >= time.Second {
-				e.Poll()
-				lastPoll, lastUI = now, now
-			} else if now.Sub(lastUI) >= 300*time.Millisecond {
-				e.PollUI() // the lights follow the control center as it moves
-				lastUI = now
-			}
-			if err := e.Flush(port, now); err != nil {
-				fmt.Fprintln(os.Stderr, "deck: lights:", err)
-			}
-			if screen && now.Sub(lastDraw) >= 150*time.Millisecond {
-				w, h := size()
-				fmt.Print("\x1b[H\x1b[2J" + e.Screen(w, h))
-				lastDraw = now
-			}
+		}()
+	}
+	l := deck.Loop{Port: port, Keys: events, Stop: quit,
+		Warn: func(err error) { fmt.Fprintln(os.Stderr, "deck: lights:", err) }}
+	if screen {
+		l.Draw = func() {
+			w, h := size()
+			fmt.Print("\x1b[H\x1b[2J" + e.Screen(w, h))
 		}
 	}
+	err = e.Run(l)
+	if line := deck.LagLine(e.Lags()); line != "" {
+		fmt.Println(line)
+	}
+	return err
 }
 
 func pick(a, b string) string {
