@@ -239,7 +239,7 @@ func Workspace() string {
 
 // Local is the daemon running on this machine, from <workspace>/.hive/private/daemon.json.
 func Local(workspace string) (*Client, error) {
-	c := &Client{infoFile: filepath.Join(workspace, ".hive", "private", "daemon.json"), http: newHTTP(nil)}
+	c := &Client{infoFile: filepath.Join(workspace, ".hive", "private", "daemon.json"), http: newHTTP(http.ProxyFromEnvironment)}
 	info, err := c.readInfo()
 	if err != nil {
 		return nil, err
@@ -250,7 +250,7 @@ func Local(workspace string) (*Client, error) {
 
 // Remote is a daemon at url (http://host:port) with the person's token.
 func Remote(url, token string) *Client {
-	return &Client{info: Info{URL: strings.TrimRight(url, "/"), Token: strings.TrimSpace(token)}, http: newHTTP(nil)}
+	return &Client{info: Info{URL: strings.TrimRight(url, "/"), Token: strings.TrimSpace(token)}, http: newHTTP(http.ProxyFromEnvironment)}
 }
 
 // newHTTP is the deck's client to the daemon. The deck keeps a read of the

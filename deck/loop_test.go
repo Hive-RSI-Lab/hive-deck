@@ -331,3 +331,26 @@ func TestLagAfterARestart(t *testing.T) {
 		t.Fatalf("lagging %+v, lags %+v, awaiting %v", e.lagging, e.Lags(), e.awaiting())
 	}
 }
+
+// A jog on the deck's own threads view while a read is out stays where it
+// went when the read lands.
+func TestJogDuringAReadStays(t *testing.T) {
+	st := waiting()
+	st.Chats = []hive.Chat{{ID: "c1", Title: "lead"}, {ID: "c2", Title: "deck"}, {ID: "c3", Title: "hive"}}
+	e, _, _, _ := setup(t, "", st, false)
+	e.async = true
+	e.setView("threads")
+	read := e.Reader()
+	press(t, e, e.p, t0, jogDown...)
+	if e.sel["threads"] != 1 || e.chat != "c2" {
+		t.Fatalf("the jog went to %d %s, want 1 c2", e.sel["threads"], e.chat)
+	}
+	e.Apply(read())
+	if e.sel["threads"] != 1 || e.chat != "c2" {
+		t.Fatalf("the read took the jog back to %d %s", e.sel["threads"], e.chat)
+	}
+	e.Apply(e.Reader()())
+	if e.sel["threads"] != 1 || e.chat != "c2" {
+		t.Fatalf("a read since moved it to %d %s", e.sel["threads"], e.chat)
+	}
+}

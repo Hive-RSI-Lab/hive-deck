@@ -126,7 +126,8 @@ type Read struct {
 	Events []hive.Event
 	Chat   string
 	Thread []hive.Message
-	sel    int
+	sel    int // the chat's row, clamped to the chats read
+	asked  int // the threads selection when the read began
 	thread bool
 }
 
@@ -135,7 +136,7 @@ type Read struct {
 func (e *Engine) Reader() func() Read {
 	h, after, thread, sel := e.h, e.after, e.view == "threads", e.sel["threads"]
 	return func() Read {
-		r := Read{thread: thread}
+		r := Read{thread: thread, asked: sel}
 		if r.State, r.Err = h.State(); r.Err != nil {
 			return r
 		}
@@ -179,7 +180,8 @@ func (e *Engine) Apply(r Read) {
 	if e.view == "threads" {
 		if !r.thread {
 			e.loadThread()
-		} else if r.Chat != "" {
+		} else if r.Chat != "" && e.sel["threads"] == r.asked {
+			// A jog during the read moved on and loaded its own chat: keep it.
 			if r.Chat != e.chat {
 				e.scroll = 0
 			}
