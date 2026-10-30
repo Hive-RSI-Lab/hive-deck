@@ -1,5 +1,8 @@
 {
   "test": "go test ./...",
+  "forge_tests": [
+    "test (ubuntu-latest)"
+  ],
   "score": {
     "command": "go run ./cmd/score",
     "direction": "higher",
