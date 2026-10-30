@@ -1,0 +1,44 @@
+name: ci
+# deck's tests run here, not on the Hive's machine: .hive/project.json names this job's check
+# ("test (ubuntu-latest)") in forge_tests. Standard hosted runners of a public repo only, which
+# have no minute cap; no larger or paid runners.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  # A PR's superseded run is cancelled; every push to main gets a group of its own.
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  # The Hive reads this job as "test (ubuntu-latest)"; keep it unnamed.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The exact command in .hive/project.json's test.
+      - name: go test ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee "$RUNNER_TEMP/suite.log"
+      # Job logs need a login; annotations don't, so the Hive can read what failed.
+      - name: name the failing tests
+        if: failure()
+        shell: bash
+        run: |
+          grep -n -e '--- FAIL' -e '^panic:' "$RUNNER_TEMP/suite.log" | head -20 | while IFS=: read -r n _; do
+            echo "::error::$(sed -n "$n,$((n + 30))p" "$RUNNER_TEMP/suite.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
+          done
